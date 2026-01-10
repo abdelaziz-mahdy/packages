@@ -467,11 +467,7 @@ class CameraPlugin extends CameraPlatform {
   }
 
   @override
-  Future<void> startVideoCapturing(VideoCaptureOptions options) {
-    if (options.streamCallback != null || options.streamOptions != null) {
-      throw UnimplementedError('Streaming is not currently supported on web');
-    }
-
+  Future<void> startVideoCapturing(VideoCaptureOptions options) async {
     try {
       final Camera camera = getCamera(options.cameraId);
 
@@ -490,7 +486,13 @@ class CameraPlugin extends CameraPlatform {
         );
       });
 
-      return camera.startVideoRecording();
+      await camera.startVideoRecording();
+
+      // If a stream callback is provided, start streaming frames to it.
+      if (options.streamCallback != null) {
+        onStreamedFrameAvailable(options.cameraId, options: options.streamOptions)
+            .listen(options.streamCallback);
+      }
     } on web.DOMException catch (e) {
       throw PlatformException(code: e.name, message: e.message);
     } on CameraWebException catch (e) {
@@ -642,6 +644,24 @@ class CameraPlugin extends CameraPlatform {
   Future<void> resumePreview(int cameraId) async {
     try {
       await getCamera(cameraId).play();
+    } on web.DOMException catch (e) {
+      throw PlatformException(code: e.name, message: e.message);
+    } on CameraWebException catch (e) {
+      _addCameraErrorEvent(e);
+      throw PlatformException(code: e.code.toString(), message: e.description);
+    }
+  }
+
+  @override
+  bool supportsImageStreaming() => true;
+
+  @override
+  Stream<CameraImageData> onStreamedFrameAvailable(
+    int cameraId, {
+    CameraImageStreamOptions? options,
+  }) {
+    try {
+      return getCamera(cameraId).startImageStream();
     } on web.DOMException catch (e) {
       throw PlatformException(code: e.name, message: e.message);
     } on CameraWebException catch (e) {

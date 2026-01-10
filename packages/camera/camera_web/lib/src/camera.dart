@@ -159,6 +159,22 @@ class Camera {
   final StreamController<VideoRecordedEvent> videoRecorderController =
       StreamController<VideoRecordedEvent>.broadcast();
 
+  /// The stream controller for image streaming frames.
+  @visibleForTesting
+  StreamController<CameraImageData>? imageStreamController;
+
+  /// The animation frame request ID for streaming.
+  int? _animationFrameId;
+
+  /// Whether image streaming is currently active.
+  bool _isStreaming = false;
+
+  /// The canvas element used for capturing frames.
+  web.HTMLCanvasElement? _streamCanvas;
+
+  /// The canvas rendering context for frame capture.
+  web.CanvasRenderingContext2D? _streamCanvasContext;
+
   /// Initializes the camera stream displayed in the [videoElement].
   /// Registers the camera view with [textureId] under [_getViewType] type.
   /// Emits the camera default video track on the [onEnded] stream when it ends.
@@ -224,6 +240,9 @@ class Camera {
 
   /// Stops the camera stream and resets the camera source.
   void stop() {
+    if (stream == null) {
+      return;
+    }
     final List<web.MediaStreamTrack> videoTracks = stream!
         .getVideoTracks()
         .toDart;
@@ -573,9 +592,129 @@ class Camera {
     return _videoAvailableCompleter!.future;
   }
 
+  /// Starts streaming frames from the camera.
+  ///
+  /// Returns a [Stream] of [CameraImageData] containing RGBA pixel data
+  /// captured from the video element using a canvas.
+  Stream<CameraImageData> startImageStream() {
+    if (_isStreaming) {
+      return imageStreamController!.stream;
+    }
+
+    imageStreamController = StreamController<CameraImageData>.broadcast(
+      onListen: _onStreamListen,
+      onCancel: _onStreamCancel,
+    );
+
+    return imageStreamController!.stream;
+  }
+
+  /// Stops streaming frames from the camera.
+  Future<void> stopImageStream() async {
+    if (!_isStreaming) {
+      return;
+    }
+
+    _isStreaming = false;
+    if (_animationFrameId != null) {
+      window.cancelAnimationFrame(_animationFrameId!);
+      _animationFrameId = null;
+    }
+
+    _streamCanvas = null;
+    _streamCanvasContext = null;
+
+    await imageStreamController?.close();
+    imageStreamController = null;
+  }
+
+  void _onStreamListen() {
+    if (_isStreaming) {
+      return;
+    }
+
+    _isStreaming = true;
+
+    // Initialize the canvas for frame capture
+    final int width = videoElement.videoWidth;
+    final int height = videoElement.videoHeight;
+
+    _streamCanvas = web.HTMLCanvasElement()
+      ..width = width
+      ..height = height;
+    _streamCanvasContext =
+        _streamCanvas!.getContext('2d')! as web.CanvasRenderingContext2D;
+
+    // Start the frame capture loop
+    _captureFrame(0.0);
+  }
+
+  void _onStreamCancel() {
+    stopImageStream();
+  }
+
+  void _captureFrame(double timestamp) {
+    if (!_isStreaming || imageStreamController == null) {
+      return;
+    }
+
+    final int width = videoElement.videoWidth;
+    final int height = videoElement.videoHeight;
+
+    // Update canvas size if video dimensions changed
+    if (_streamCanvas!.width != width || _streamCanvas!.height != height) {
+      _streamCanvas!.width = width;
+      _streamCanvas!.height = height;
+    }
+
+    // Draw the current video frame onto the canvas
+    _streamCanvasContext!.drawImage(videoElement, 0, 0);
+
+    // Get the pixel data from the canvas (RGBA format)
+    final web.ImageData imageData = _streamCanvasContext!.getImageData(
+      0,
+      0,
+      width,
+      height,
+    );
+
+    // Convert the JavaScript Uint8ClampedArray to Dart Uint8List
+    final Uint8List bytes = imageData.data.toDart.buffer.asUint8List();
+
+    // Create CameraImageData with RGBA format
+    final frameData = CameraImageData(
+      format: const CameraImageFormat(
+        ImageFormatGroup.bgra8888,
+        raw: 'RGBA', // Web canvas outputs RGBA, close enough to BGRA for processing
+      ),
+      planes: <CameraImagePlane>[
+        CameraImagePlane(
+          bytes: bytes,
+          bytesPerRow: width * 4, // 4 bytes per pixel (RGBA)
+          bytesPerPixel: 4,
+          width: width,
+          height: height,
+        ),
+      ],
+      width: width,
+      height: height,
+    );
+
+    // Add the frame to the stream
+    if (!imageStreamController!.isClosed) {
+      imageStreamController!.add(frameData);
+    }
+
+    // Schedule the next frame capture
+    _animationFrameId = window.requestAnimationFrame(_captureFrame.toJS);
+  }
+
   /// Disposes the camera by stopping the camera stream,
   /// the video recording and reloading the camera source.
   Future<void> dispose() async {
+    // Stop image streaming if active
+    await stopImageStream();
+
     // Stop the camera stream.
     stop();
 

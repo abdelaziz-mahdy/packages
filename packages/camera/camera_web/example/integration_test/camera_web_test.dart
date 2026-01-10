@@ -3133,5 +3133,54 @@ void main() {
         });
       });
     });
+
+    group('supportsImageStreaming', () {
+      testWidgets('returns true', (WidgetTester tester) async {
+        expect(CameraPlatform.instance.supportsImageStreaming(), isTrue);
+      });
+    });
+
+    group('onStreamedFrameAvailable', () {
+      testWidgets(
+        'returns a stream of CameraImageData from the camera',
+        (WidgetTester tester) async {
+          final camera = Camera(
+            textureId: cameraId,
+            cameraService: cameraService,
+          );
+
+          await camera.initialize();
+          await camera.play();
+
+          // Save the camera in the camera plugin.
+          (CameraPlatform.instance as CameraPlugin).cameras[cameraId] = camera;
+
+          final Stream<CameraImageData> stream =
+              CameraPlatform.instance.onStreamedFrameAvailable(cameraId);
+
+          expect(stream, isA<Stream<CameraImageData>>());
+
+          await camera.stopImageStream();
+        },
+      );
+
+      group('throws PlatformException', () {
+        testWidgets(
+          'with notFound error if the camera does not exist',
+          (WidgetTester tester) async {
+            expect(
+              () => CameraPlatform.instance.onStreamedFrameAvailable(cameraId),
+              throwsA(
+                isA<PlatformException>().having(
+                  (PlatformException e) => e.code,
+                  'code',
+                  CameraErrorCode.notFound.toString(),
+                ),
+              ),
+            );
+          },
+        );
+      });
+    });
   });
 }

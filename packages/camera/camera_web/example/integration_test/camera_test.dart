@@ -1537,5 +1537,59 @@ void main() {
         });
       });
     });
+
+    group('startImageStream', () {
+      testWidgets('returns a stream of CameraImageData', (
+        WidgetTester tester,
+      ) async {
+        final camera = Camera(textureId: textureId, cameraService: cameraService);
+
+        await camera.initialize();
+        await camera.play();
+
+        final Stream<CameraImageData> stream = camera.startImageStream();
+
+        expect(stream, isA<Stream<CameraImageData>>());
+
+        await camera.stopImageStream();
+      });
+
+      testWidgets('emits CameraImageData with correct format', (
+        WidgetTester tester,
+      ) async {
+        final camera = Camera(textureId: textureId, cameraService: cameraService);
+
+        await camera.initialize();
+        await camera.play();
+
+        final streamQueue = StreamQueue<CameraImageData>(
+          camera.startImageStream(),
+        );
+
+        final CameraImageData frameData = await streamQueue.next;
+
+        expect(frameData.format.group, equals(ImageFormatGroup.bgra8888));
+        expect(frameData.planes, hasLength(1));
+        expect(frameData.planes.first.bytesPerPixel, equals(4));
+
+        await streamQueue.cancel();
+        await camera.stopImageStream();
+      });
+    });
+
+    group('stopImageStream', () {
+      testWidgets('stops the image stream', (WidgetTester tester) async {
+        final camera = Camera(textureId: textureId, cameraService: cameraService);
+
+        await camera.initialize();
+        await camera.play();
+
+        camera.startImageStream();
+        await camera.stopImageStream();
+
+        // After stopping, the stream controller should be null
+        expect(camera.imageStreamController, isNull);
+      });
+    });
   });
 }

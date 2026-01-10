@@ -68,6 +68,11 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
   // Counting pointers (number of user fingers on screen)
   int _pointers = 0;
 
+  // Image streaming state
+  bool _isStreaming = false;
+  int _streamFrameCount = 0;
+  DateTime? _streamStartTime;
+
   @override
   void initState() {
     super.initState();
@@ -143,7 +148,9 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
                   color:
                       controller != null && controller!.value.isRecordingVideo
                       ? Colors.redAccent
-                      : Colors.grey,
+                      : _isStreaming
+                          ? Colors.green
+                          : Colors.grey,
                   width: 3.0,
                 ),
               ),
@@ -153,6 +160,8 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
               ),
             ),
           ),
+          // Streaming stats indicator
+          if (_isStreaming) _streamingStatsWidget(),
           _captureControlRowWidget(),
           _modeControlRowWidget(),
           Padding(
@@ -160,6 +169,32 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
             child: Row(
               children: <Widget>[_cameraTogglesRowWidget(), _thumbnailWidget()],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Display streaming statistics when streaming is active.
+  Widget _streamingStatsWidget() {
+    final Duration elapsed =
+        DateTime.now().difference(_streamStartTime ?? DateTime.now());
+    final double fps =
+        elapsed.inMilliseconds > 0
+        ? (_streamFrameCount / elapsed.inMilliseconds * 1000)
+        : 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+      color: Colors.green.withValues(alpha: 0.8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          const Icon(Icons.stream, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            'Streaming: $_streamFrameCount frames | ${fps.toStringAsFixed(1)} FPS',
+            style: const TextStyle(color: Colors.white, fontSize: 12),
           ),
         ],
       ),
@@ -493,6 +528,10 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
   Widget _captureControlRowWidget() {
     final CameraController? cameraController = controller;
 
+    // Check if streaming is supported on this platform
+    final bool supportsStreaming =
+        cameraController?.supportsImageStreaming() ?? false;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: <Widget>[
@@ -552,6 +591,18 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
               ? null
               : onPausePreviewButtonPressed,
         ),
+        // Image streaming button - only show if platform supports it
+        if (supportsStreaming)
+          IconButton(
+            icon: Icon(_isStreaming ? Icons.stream : Icons.stream_outlined),
+            color: _isStreaming ? Colors.green : Colors.blue,
+            onPressed:
+                cameraController != null &&
+                    cameraController.value.isInitialized &&
+                    !cameraController.value.isRecordingVideo
+                ? onStreamingButtonPressed
+                : null,
+          ),
       ],
     );
   }
@@ -857,6 +908,79 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
       }
       showInSnackBar('Video recording resumed');
     });
+  }
+
+  void onStreamingButtonPressed() {
+    if (_isStreaming) {
+      _stopImageStream();
+    } else {
+      _startImageStream();
+    }
+  }
+
+  Future<void> _startImageStream() async {
+    final CameraController? cameraController = controller;
+
+    if (cameraController == null || !cameraController.value.isInitialized) {
+      showInSnackBar('Error: select a camera first.');
+      return;
+    }
+
+    if (!cameraController.supportsImageStreaming()) {
+      showInSnackBar('Image streaming not supported on this platform.');
+      return;
+    }
+
+    try {
+      _streamFrameCount = 0;
+      _streamStartTime = DateTime.now();
+
+      await cameraController.startImageStream((CameraImage image) {
+        _streamFrameCount++;
+        // Update UI every 30 frames to avoid excessive rebuilds
+        if (_streamFrameCount % 30 == 0 && mounted) {
+          setState(() {});
+        }
+      });
+
+      setState(() {
+        _isStreaming = true;
+      });
+
+      showInSnackBar('Image streaming started');
+    } on CameraException catch (e) {
+      _showCameraException(e);
+    }
+  }
+
+  Future<void> _stopImageStream() async {
+    final CameraController? cameraController = controller;
+
+    if (cameraController == null) {
+      return;
+    }
+
+    try {
+      await cameraController.stopImageStream();
+
+      final Duration elapsed =
+          DateTime.now().difference(_streamStartTime ?? DateTime.now());
+      final double fps =
+          elapsed.inMilliseconds > 0
+          ? (_streamFrameCount / elapsed.inMilliseconds * 1000)
+          : 0;
+
+      setState(() {
+        _isStreaming = false;
+      });
+
+      showInSnackBar(
+        'Streaming stopped. Frames: $_streamFrameCount, '
+        'Duration: ${elapsed.inSeconds}s, FPS: ${fps.toStringAsFixed(1)}',
+      );
+    } on CameraException catch (e) {
+      _showCameraException(e);
+    }
   }
 
   Future<void> startVideoRecording() async {
